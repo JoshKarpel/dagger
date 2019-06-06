@@ -1,3 +1,19 @@
+# Copyright 2019 HTCondor Team, Computer Sciences Department,
+# University of Wisconsin-Madison, WI.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 import collections
 import enum
 import itertools
@@ -6,6 +22,7 @@ import re
 import sys
 import time
 import heapq
+import subprocess
 
 import htcondor
 import htcondor_jobs as jobs
@@ -135,6 +152,19 @@ class DAG:
         if self.jobstate_log is None:
             self.jobstate_log = match.group("filename")
 
+    def _process_script(self, match, line_number):
+        node = self.nodes[match.group("name")]
+
+        type = ScriptType(match.group("type").upper())
+
+        args = match.group("arguments")
+        node.scripts[type] = Script(
+            node = node,
+            type = type,
+            executable = match.group("executable"),
+            arguments = args.split() if args is not None else None,
+        )
+
 
 class Node:
     def __init__(
@@ -161,8 +191,7 @@ class Node:
         self.retry_unless_exit = retry_unless_exit
         self.priority = priority
 
-        self._pre = None
-        self._post = None
+        self.scripts = {}
 
         self.parents = parents or set()
         self.children = children or set()
@@ -247,6 +276,7 @@ def execute(dag, max_execute_per_cycle = None):
 
             print(f"executing node {node.name} with prio {prio}!")
             if not node.noop:
+                do_script(node, ScriptType.PRE)
                 handle = execute_node(node)
             else:
                 print('node was noop')
@@ -257,13 +287,15 @@ def execute(dag, max_execute_per_cycle = None):
 
         for node, handle in executing_nodes.copy():
             if is_node_complete(handle):
-                print(f"node {node.name} is done!")
+                do_script(node, ScriptType.POST)
                 for child in node.children:
                     remaining_parents[child].remove(node)
                 executing_nodes.remove((node, handle))
                 num_done += 1
+                print(f"node {node.name} is done!")
 
-        time.sleep(0.1)
+        time.sleep(1)
+        print()
 
     return num_done
 
@@ -271,12 +303,35 @@ def execute(dag, max_execute_per_cycle = None):
 def execute_node(node):
     sub = htcondor.Submit(node.submit_file.read_text())
     sub = jobs.SubmitDescription(sub)
+    for k, v in node.vars.items():
+        sub[k] = v
     print('submit description', sub)
 
     handle = jobs.submit(sub, count = 1)
     print('handle is', handle)
 
     return handle
+
+
+def do_script(node, which):
+    try:
+        script = node.scripts[which]
+    except KeyError:
+        print(f'no {which}script for node {node.name}...')
+        return
+
+    print(f'running {which}script for node {node.name}...')
+    args = script.arguments
+    processed_args = []
+    for arg in args:
+        if arg == '$JOB':
+            processed_args.append(node.name)
+        else:
+            processed_args.append(arg)
+    print(f'executing {script.executable} {" ".join(processed_args)}')
+    p = subprocess.run([script.executable, *processed_args], capture_output = True)
+
+    print(p)
 
 
 def is_node_complete(handle):
