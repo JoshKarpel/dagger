@@ -21,4 +21,3 @@ import os
 def clear_queue():
     yield
     os.system("condor_rm --all")
-

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
+import os
 import collections
 import enum
 import itertools
@@ -30,54 +30,54 @@ import htcondor_jobs as jobs
 
 class NodeDict(collections.defaultdict):
     def __missing__(self, key):
-        self[key] = Node(name = key)
+        self[key] = Node(name=key)
         return self[key]
 
 
 CMD_REGEXES = dict(
-    dot = re.compile(r"^DOT\s+(?P<filename>\S+)(\s+(?P<options>.+))?", re.IGNORECASE),
-    job = re.compile(
+    dot=re.compile(r"^DOT\s+(?P<filename>\S+)(\s+(?P<options>.+))?", re.IGNORECASE),
+    job=re.compile(
         r"^JOB\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
         re.IGNORECASE,
     ),
-    data = re.compile(
+    data=re.compile(
         r"^DATA\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
         re.IGNORECASE,
     ),
-    subdag = re.compile(
+    subdag=re.compile(
         r"^SUBDAG\s+EXTERNAL\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
         re.IGNORECASE,
     ),
-    splice = re.compile(
+    splice=re.compile(
         r"^SPLICE\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?",
         re.IGNORECASE,
     ),
-    priority = re.compile(r"^PRIORITY\s+(?P<name>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
-    category = re.compile(
+    priority=re.compile(r"^PRIORITY\s+(?P<name>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
+    category=re.compile(
         r"^CATEGORY\s+(?P<name>\S+)\s+(?P<category>\S+)", re.IGNORECASE
     ),
-    retry = re.compile(
+    retry=re.compile(
         r"^RETRY\s+(?P<name>\S+)\s+(?P<retries>\S+)(\s+UNLESS-EXIT\s+(?P<retry_unless_exit_value>\S+))?",
         re.IGNORECASE,
     ),
-    vars = re.compile(r"^VARS\s+(?P<name>\S+)\s+(?P<vars>.+)", re.IGNORECASE),
-    script = re.compile(
+    vars=re.compile(r"^VARS\s+(?P<name>\S+)\s+(?P<vars>.+)", re.IGNORECASE),
+    script=re.compile(
         r"^SCRIPT\s+(?P<type>(PRE)|(POST))\s(?P<name>\S+)\s+(?P<executable>\S+)(\s+(?P<arguments>.+))?",
         re.IGNORECASE,
     ),
-    abortdagon = re.compile(
+    abortdagon=re.compile(
         r"^ABORT-DAG-ON\s+(?P<name>\S+)\s+(?P<exitvalue>\S+)(\s+RETURN\s+(?P<returnvalue>\S+))?",
         re.IGNORECASE,
     ),
-    edges = re.compile(
+    edges=re.compile(
         r"^PARENT\s+(?P<parents>.+?)\s+CHILD\s+(?P<children>.+)", re.IGNORECASE
     ),
-    maxjobs = re.compile(r"^MAXJOBS\s+(?P<category>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
-    config = re.compile(r"^CONFIG\s+(?P<filename>\S+)", re.IGNORECASE),
-    nodestatus = re.compile(
+    maxjobs=re.compile(r"^MAXJOBS\s+(?P<category>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
+    config=re.compile(r"^CONFIG\s+(?P<filename>\S+)", re.IGNORECASE),
+    nodestatus=re.compile(
         r"^NODE_STATUS_FILE\s+(?P<filename>\S+)(\s+(?P<updatetime>\S+))?", re.IGNORECASE
     ),
-    jobstate = re.compile(r"^JOBSTATE_LOG\s+(?P<filename>\S+)", re.IGNORECASE),
+    jobstate=re.compile(r"^JOBSTATE_LOG\s+(?P<filename>\S+)", re.IGNORECASE),
 )
 
 EXTRACT_VARS = re.compile(r'(?P<key>\S+)\s*=\s*"(?P<value>.*?)(?<!\\)"', re.IGNORECASE)
@@ -93,8 +93,8 @@ class DAG:
         path = Path(path)
         dag = cls()
 
-        with path.open(mode = "r") as f:
-            for line_number, line in enumerate(f, start = 1):
+        with path.open(mode="r") as f:
+            for line_number, line in enumerate(f, start=1):
                 dag._process_line(line, line_number)
 
         return dag
@@ -159,10 +159,10 @@ class DAG:
 
         args = match.group("arguments")
         node.scripts[type] = Script(
-            node = node,
-            type = type,
-            executable = match.group("executable"),
-            arguments = args.split() if args is not None else None,
+            node=node,
+            type=type,
+            executable=match.group("executable"),
+            arguments=args.split() if args is not None else None,
         )
 
 
@@ -170,16 +170,16 @@ class Node:
     def __init__(
         self,
         name,
-        submit_file = None,
-        dir = None,
-        noop = False,
-        done = False,
-        vars = None,
-        retries = 0,
-        retry_unless_exit = None,
-        parents = None,
-        children = None,
-        priority = 0,
+        submit_file=None,
+        dir=None,
+        noop=False,
+        done=False,
+        vars=None,
+        retries=0,
+        retry_unless_exit=None,
+        parents=None,
+        children=None,
+        priority=0,
     ):
         self.name = name
         self.submit_file = Path(submit_file) if submit_file is not None else None
@@ -221,10 +221,10 @@ class Script:
         node,
         type,
         executable,
-        arguments = None,
-        retry = False,
-        retry_status = 1,
-        retry_delay = 0,
+        arguments=None,
+        retry=False,
+        retry_status=1,
+        retry_delay=0,
     ):
         self.node = node
         self.type = type
@@ -247,7 +247,7 @@ class Script:
         return " ".join(parts)
 
 
-def execute(dag, max_execute_per_cycle = None):
+def execute(dag, max_execute_per_cycle=None):
     executable_nodes = []
     executing_nodes = []
     waiting_nodes = set(dag.nodes.values())
@@ -257,9 +257,9 @@ def execute(dag, max_execute_per_cycle = None):
     num_done = 0
 
     while len(waiting_nodes) + len(executable_nodes) + len(executing_nodes) > 0:
-        print('waiting', waiting_nodes)
-        print('executable', executable_nodes)
-        print('executing', executing_nodes)
+        print("waiting", waiting_nodes)
+        print("executable", executable_nodes)
+        print("executing", executing_nodes)
         for node in waiting_nodes.copy():
             if len(remaining_parents[node]) == 0:
                 print(f"node {node.name} can execute")
@@ -268,8 +268,11 @@ def execute(dag, max_execute_per_cycle = None):
 
         num_executed = 0
         while len(executable_nodes) > 0:
-            if max_execute_per_cycle is not None and num_executed > max_execute_per_cycle:
-                print('broke because hit max_execute_per_cycle')
+            if (
+                max_execute_per_cycle is not None
+                and num_executed > max_execute_per_cycle
+            ):
+                print("broke because hit max_execute_per_cycle")
                 break
 
             prio, node = heapq.heappop(executable_nodes)
@@ -279,7 +282,7 @@ def execute(dag, max_execute_per_cycle = None):
                 do_script(node, ScriptType.PRE)
                 handle = execute_node(node)
             else:
-                print('node was noop')
+                print("node was noop")
                 handle = None
 
             executing_nodes.append((node, handle))
@@ -302,13 +305,37 @@ def execute(dag, max_execute_per_cycle = None):
 
 def execute_node(node):
     sub = htcondor.Submit(node.submit_file.read_text())
-    sub = jobs.SubmitDescription(sub)
     for k, v in node.vars.items():
         sub[k] = v
-    print('submit description', sub)
 
-    handle = jobs.submit(sub, count = 1)
-    print('handle is', handle)
+    sub["dag_node_name"] = node.name
+    # sub['+DAGManJobId'] = # todo: get cluster
+    # sub['DAGManJobId'] = # todo: same
+    sub["submit_event_notes"] = f"DAG Node: {node.name}"
+    # sub['dagman_log'] = # todo: where does this come from?
+    # sub["+DAGManNodesMask"] = '"' # todo: getEventMask() produces this
+    sub["priority"] = str(node.priority)
+    # some conditional coming in to suppress node job logs
+    sub["+DAGParentNodeNames"] = f"\"{' '.join(n.name for n in node.parents)}\""
+    # something about DAG_STATUS
+    # something about FAILED_COUNT
+    # something about holding claims
+    # something about suppressing notifications
+    # something about accounting group and user
+
+    print("submit description", sub)
+
+    currdir = os.getcwd()
+    os.chdir(node.dir)
+
+    schedd = htcondor.Schedd()
+    with schedd.transaction() as txn:
+        result = sub.queue_with_itemdata(txn)
+
+    os.chdir(currdir)
+
+    handle = jobs.ClusterHandle(result)
+    print("handle is", handle)
 
     return handle
 
@@ -317,24 +344,24 @@ def do_script(node, which):
     try:
         script = node.scripts[which]
     except KeyError:
-        print(f'no {which}script for node {node.name}...')
+        print(f"no {which}script for node {node.name}...")
         return
 
-    print(f'running {which}script for node {node.name}...')
+    print(f"running {which}script for node {node.name}...")
     args = script.arguments
     processed_args = []
     for arg in args:
-        if arg == '$JOB':
+        if arg == "$JOB":
             processed_args.append(node.name)
         else:
             processed_args.append(arg)
     print(f'executing {script.executable} {" ".join(processed_args)}')
-    p = subprocess.run([script.executable, *processed_args], capture_output = True)
+    p = subprocess.run([script.executable, *processed_args], capture_output=True)
 
     print(p)
 
 
 def is_node_complete(handle):
-    if handle is None:
+    if handle is None:  # no handle means noop node
         return True
     return handle.state.is_complete()
