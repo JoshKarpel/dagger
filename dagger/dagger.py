@@ -248,11 +248,31 @@ class Script:
     def __str__(self):
         parts = ["SCRIPT"]
         if self.retry:
-            parts.extend(["DEFER", str(self.retry_status), str(self.retry_delay)])
+            parts.extend(("DEFER", str(self.retry_status), str(self.retry_delay)))
         parts.extend(
-            [self.type, self.node.name, self.executable, " ".join(self.arguments)]
+            (self.type, self.node.name, self.executable, " ".join(self.arguments))
         )
         return " ".join(parts)
+
+
+class Heap:
+    def __init__(self, initial_data=None, key=None):
+        if initial_data is None:
+            initial_data = []
+        if key is None:
+            key = lambda item: item
+        self.data = list(initial_data)
+        self.key = key
+
+    def push(self, item):
+        heapq.heappush(self.data, (self.key(item), item))
+
+    def pop(self):
+        _, item = heapq.heappop(self.data)
+        return item
+
+    def __len__(self):
+        return len(self.data)
 
 
 class Executor:
@@ -263,8 +283,8 @@ class Executor:
 
     def execute(self):
         waiting_nodes = set(self.dag.nodes.values())
-        executable_nodes = []
-        executing_nodes = set()
+        executable_nodes = Heap(key=lambda node: node.priority)
+        executing_nodes = {}
 
         remaining_parents = {n: n.parents.copy() for n in waiting_nodes}
 
@@ -284,7 +304,7 @@ class Executor:
             for node in waiting_nodes.copy():
                 if len(remaining_parents[node]) == 0:
                     logger.debug(f"node {node.name} can execute")
-                    heapq.heappush(executable_nodes, (node.priority, node))
+                    executable_nodes.push(node)
                     waiting_nodes.remove(node)
 
             num_executed = 0
@@ -293,11 +313,13 @@ class Executor:
                     self.max_execute_per_cycle is not None
                     and num_executed > self.max_execute_per_cycle
                 ):
-                    logger.debug("broke because hit max_execute_per_cycle")
+                    logger.debug(
+                        f"not executing more nodes this cycle because hit max_execute_per_cycle ({self.max_execute_per_cycle})"
+                    )
                     break
 
-                prio, node = heapq.heappop(executable_nodes)
-                logger.debug(f"considering node {node} with prio {prio} for execution")
+                node = executable_nodes.pop()
+                logger.debug(f"executing node {node} with priority {node.priority}")
 
                 if node.noop:
                     logger.debug(f"node {node} was NOOP")
@@ -306,15 +328,15 @@ class Executor:
                     self._run_script(node, ScriptType.PRE)
                     handle = self._run_node(node)
 
-                executing_nodes.add((node, handle))
+                executing_nodes[node] = handle
                 num_executed += 1
 
-            for node, handle in executing_nodes.copy():
+            for node, handle in executing_nodes.copy().items():
                 if self._is_node_complete(handle):
                     self._run_script(node, ScriptType.POST)
                     for child in node.children:
                         remaining_parents[child].remove(node)
-                    executing_nodes.remove((node, handle))
+                    executing_nodes.pop(node)
                     num_done += 1
                     logger.debug(f"node {node} is complete")
                 else:
@@ -323,6 +345,7 @@ class Executor:
             loop_time = time.time() - cycle_start
             sleep = max(self.min_loop_delay - loop_time, 0)
 
+            logger.debug(f"{num_done}/{len(self.dag.nodes)} nodes are complete")
             logger.debug(
                 f"finished execute cycle {cycle} in {loop_time:.6f} seconds, sleeping {sleep:.6f} seconds before next loop"
             )
