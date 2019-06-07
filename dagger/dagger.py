@@ -201,9 +201,12 @@ class Node:
         self.parents = parents or set()
         self.children = children or set()
 
-    def __str__(self):
+    def __repr__(self):
+        return f"{self.__class__.__name__}({self.name})"
+
+    def description(self):
         data = "\n".join(f"  {k} = {v}" for k, v in self.__dict__.items())
-        return f"Node(\n{data}\n)"
+        return f"{self.__class__.__name__}(\n{data}\n)"
 
     def __hash__(self):
         return hash((self.__class__, self.name))
@@ -252,121 +255,140 @@ class Script:
         return " ".join(parts)
 
 
-def execute(dag, max_execute_per_cycle=None):
-    waiting_nodes = set(dag.nodes.values())
-    executable_nodes = []
-    executing_nodes = set()
+class Executor:
+    def __init__(self, dag, max_execute_per_cycle=None, min_loop_delay=1):
+        self.dag = dag
+        self.max_execute_per_cycle = max_execute_per_cycle
+        self.min_loop_delay = min_loop_delay
 
-    remaining_parents = {n: n.parents.copy() for n in waiting_nodes}
+    def execute(self):
+        waiting_nodes = set(self.dag.nodes.values())
+        executable_nodes = []
+        executing_nodes = set()
 
-    num_done = 0
+        remaining_parents = {n: n.parents.copy() for n in waiting_nodes}
 
-    while len(waiting_nodes) + len(executable_nodes) + len(executing_nodes) > 0:
-        logger.debug(f"waiting nodes: {waiting_nodes}")
-        logger.debug(f"executable nodes: {executable_nodes}")
-        logger.debug(f"executing nodes: {executing_nodes}")
-        for node in waiting_nodes.copy():
-            if len(remaining_parents[node]) == 0:
-                logger.debug(f"node {node.name} can execute")
-                heapq.heappush(executable_nodes, (node.priority, node))
-                waiting_nodes.remove(node)
+        num_done = 0
 
-        num_executed = 0
-        while len(executable_nodes) > 0:
-            if (
-                max_execute_per_cycle is not None
-                and num_executed > max_execute_per_cycle
-            ):
-                logger.debug("broke because hit max_execute_per_cycle")
-                break
+        cycle_counter = itertools.count()
 
-            prio, node = heapq.heappop(executable_nodes)
+        while len(waiting_nodes) + len(executable_nodes) + len(executing_nodes) > 0:
+            cycle_start = time.time()
+            cycle = next(cycle_counter)
 
-            logger.debug(f"executing node {node.name} with prio {prio}!")
-            if not node.noop:
-                do_script(node, ScriptType.PRE)
-                handle = execute_node(node)
-            else:
-                logger.debug("node was noop")
-                handle = None
+            logger.debug(f"beginning execute cycle {cycle}")
+            logger.debug(f"waiting nodes: {waiting_nodes}")
+            logger.debug(f"executable nodes: {executable_nodes}")
+            logger.debug(f"executing nodes: {executing_nodes}")
 
-            executing_nodes.add((node, handle))
-            num_executed += 1
+            for node in waiting_nodes.copy():
+                if len(remaining_parents[node]) == 0:
+                    logger.debug(f"node {node.name} can execute")
+                    heapq.heappush(executable_nodes, (node.priority, node))
+                    waiting_nodes.remove(node)
 
-        for node, handle in executing_nodes.copy():
-            if is_node_complete(handle):
-                do_script(node, ScriptType.POST)
-                for child in node.children:
-                    remaining_parents[child].remove(node)
-                executing_nodes.remove((node, handle))
-                num_done += 1
-                logger.debug(f"node {node.name} is done!")
+            num_executed = 0
+            while len(executable_nodes) > 0:
+                if (
+                    self.max_execute_per_cycle is not None
+                    and num_executed > self.max_execute_per_cycle
+                ):
+                    logger.debug("broke because hit max_execute_per_cycle")
+                    break
 
-        time.sleep(1)
+                prio, node = heapq.heappop(executable_nodes)
+                logger.debug(f"considering node {node} with prio {prio} for execution")
 
-    return num_done
+                if node.noop:
+                    logger.debug(f"node {node} was NOOP")
+                    handle = None
+                else:
+                    self._run_script(node, ScriptType.PRE)
+                    handle = self._run_node(node)
 
+                executing_nodes.add((node, handle))
+                num_executed += 1
 
-def execute_node(node):
-    sub = htcondor.Submit(node.submit_file.read_text())
-    for k, v in node.vars.items():
-        sub[k] = v
+            for node, handle in executing_nodes.copy():
+                if self._is_node_complete(handle):
+                    self._run_script(node, ScriptType.POST)
+                    for child in node.children:
+                        remaining_parents[child].remove(node)
+                    executing_nodes.remove((node, handle))
+                    num_done += 1
+                    logger.debug(f"node {node} is complete")
+                else:
+                    logger.debug(f"node {node} is not complete")
 
-    sub["dag_node_name"] = node.name
-    # sub['+DAGManJobId'] = # todo: get cluster
-    # sub['DAGManJobId'] = # todo: same
-    sub["submit_event_notes"] = f"DAG Node: {node.name}"
-    # sub['dagman_log'] = # todo: where does this come from?
-    # sub["+DAGManNodesMask"] = '"' # todo: getEventMask() produces this
-    sub["priority"] = str(node.priority)
-    # some conditional coming in to suppress node job logs
-    sub["+DAGParentNodeNames"] = f"\"{' '.join(n.name for n in node.parents)}\""
-    # something about DAG_STATUS
-    # something about FAILED_COUNT
-    # something about holding claims
-    # something about suppressing notifications
-    # something about accounting group and user
+            loop_time = time.time() - cycle_start
+            sleep = max(self.min_loop_delay - loop_time, 0)
 
-    logger.debug(f"submit description is {sub}")
+            logger.debug(
+                f"finished execute cycle {cycle} in {loop_time:.6f} seconds, sleeping {sleep:.6f} seconds before next loop"
+            )
+            time.sleep(sleep)
 
-    currdir = os.getcwd()
-    if node.dir is not None:
-        os.chdir(node.dir)
+        return num_done
 
-    schedd = htcondor.Schedd()
-    with schedd.transaction() as txn:
-        result = sub.queue_with_itemdata(txn)
+    def _run_node(self, node: Node):
+        sub = htcondor.Submit(node.submit_file.read_text())
+        for k, v in node.vars.items():
+            sub[k] = v
 
-    os.chdir(currdir)
+        sub["dag_node_name"] = node.name
+        # sub['+DAGManJobId'] = # todo: get cluster
+        # sub['DAGManJobId'] = # todo: same
+        sub["submit_event_notes"] = f"DAG Node: {node.name}"
+        # sub['dagman_log'] = # todo: where does this come from?
+        # sub["+DAGManNodesMask"] = '"' # todo: getEventMask() produces this
+        sub["priority"] = str(node.priority)
+        # some conditional coming in to suppress node job logs
+        sub["+DAGParentNodeNames"] = f"\"{' '.join(n.name for n in node.parents)}\""
+        # something about DAG_STATUS
+        # something about FAILED_COUNT
+        # something about holding claims
+        # something about suppressing notifications
+        # something about accounting group and user
 
-    handle = jobs.ClusterHandle(result)
-    logger.debug(f"handle is {handle}")
+        logger.debug(f"submit description for node {node} is {sub}")
 
-    return handle
+        currdir = os.getcwd()
+        if node.dir is not None:
+            os.chdir(node.dir)
 
+        schedd = htcondor.Schedd()
+        with schedd.transaction() as txn:
+            result = sub.queue_with_itemdata(txn)
 
-def do_script(node, which):
-    try:
-        script = node.scripts[which]
-    except KeyError:
-        logger.debug(f"no {which}script for node {node.name}...")
-        return
+        os.chdir(currdir)
 
-    logger.debug(f"running {which}script for node {node.name}...")
-    args = script.arguments
-    processed_args = []
-    for arg in args:
-        if arg == "$JOB":
-            processed_args.append(node.name)
-        else:
+        handle = jobs.ClusterHandle(result)
+        logger.debug(f"handle is {handle}")
+
+        return handle
+
+    def _run_script(self, node: Node, which: ScriptType):
+        try:
+            script = node.scripts[which]
+        except KeyError:
+            logger.debug(f"no {which}script for node {node.name}")
+            return
+
+        logger.debug(f"running {which}script for node {node.name}")
+
+        processed_args = []
+        for arg in script.arguments:
+            arg = arg.replace("$JOB", node.name)
+
             processed_args.append(arg)
-    logger.debug(f'executing {script.executable} {" ".join(processed_args)}')
-    p = subprocess.run([script.executable, *processed_args], capture_output=True)
 
-    logger.debug(p)
+        logger.debug(
+            f'running subprocess: "{script.executable} {" ".join(processed_args)}"'
+        )
+        p = subprocess.run([script.executable, *processed_args], capture_output=True)
+        logger.debug(f"subprocess result for node {node} {which}script: {p}")
 
-
-def is_node_complete(handle):
-    if handle is None:  # no handle means noop node
-        return True
-    return handle.state.is_complete()
+    def _is_node_complete(self, handle):
+        if handle is None:  # no handle means noop node
+            return True
+        return handle.state.is_complete()
