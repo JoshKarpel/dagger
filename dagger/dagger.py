@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
+
 import os
 import collections
 import enum
@@ -26,6 +28,9 @@ import subprocess
 
 import htcondor
 import htcondor_jobs as jobs
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class NodeDict(collections.defaultdict):
@@ -248,21 +253,21 @@ class Script:
 
 
 def execute(dag, max_execute_per_cycle=None):
-    executable_nodes = []
-    executing_nodes = []
     waiting_nodes = set(dag.nodes.values())
+    executable_nodes = []
+    executing_nodes = set()
 
     remaining_parents = {n: n.parents.copy() for n in waiting_nodes}
 
     num_done = 0
 
     while len(waiting_nodes) + len(executable_nodes) + len(executing_nodes) > 0:
-        print("waiting", waiting_nodes)
-        print("executable", executable_nodes)
-        print("executing", executing_nodes)
+        logger.debug(f"waiting nodes: {waiting_nodes}")
+        logger.debug(f"executable nodes: {executable_nodes}")
+        logger.debug(f"executing nodes: {executing_nodes}")
         for node in waiting_nodes.copy():
             if len(remaining_parents[node]) == 0:
-                print(f"node {node.name} can execute")
+                logger.debug(f"node {node.name} can execute")
                 heapq.heappush(executable_nodes, (node.priority, node))
                 waiting_nodes.remove(node)
 
@@ -272,20 +277,20 @@ def execute(dag, max_execute_per_cycle=None):
                 max_execute_per_cycle is not None
                 and num_executed > max_execute_per_cycle
             ):
-                print("broke because hit max_execute_per_cycle")
+                logger.debug("broke because hit max_execute_per_cycle")
                 break
 
             prio, node = heapq.heappop(executable_nodes)
 
-            print(f"executing node {node.name} with prio {prio}!")
+            logger.debug(f"executing node {node.name} with prio {prio}!")
             if not node.noop:
                 do_script(node, ScriptType.PRE)
                 handle = execute_node(node)
             else:
-                print("node was noop")
+                logger.debug("node was noop")
                 handle = None
 
-            executing_nodes.append((node, handle))
+            executing_nodes.add((node, handle))
             num_executed += 1
 
         for node, handle in executing_nodes.copy():
@@ -295,10 +300,9 @@ def execute(dag, max_execute_per_cycle=None):
                     remaining_parents[child].remove(node)
                 executing_nodes.remove((node, handle))
                 num_done += 1
-                print(f"node {node.name} is done!")
+                logger.debug(f"node {node.name} is done!")
 
         time.sleep(1)
-        print()
 
     return num_done
 
@@ -323,10 +327,11 @@ def execute_node(node):
     # something about suppressing notifications
     # something about accounting group and user
 
-    print("submit description", sub)
+    logger.debug(f"submit description is {sub}")
 
     currdir = os.getcwd()
-    os.chdir(node.dir)
+    if node.dir is not None:
+        os.chdir(node.dir)
 
     schedd = htcondor.Schedd()
     with schedd.transaction() as txn:
@@ -335,7 +340,7 @@ def execute_node(node):
     os.chdir(currdir)
 
     handle = jobs.ClusterHandle(result)
-    print("handle is", handle)
+    logger.debug(f"handle is {handle}")
 
     return handle
 
@@ -344,10 +349,10 @@ def do_script(node, which):
     try:
         script = node.scripts[which]
     except KeyError:
-        print(f"no {which}script for node {node.name}...")
+        logger.debug(f"no {which}script for node {node.name}...")
         return
 
-    print(f"running {which}script for node {node.name}...")
+    logger.debug(f"running {which}script for node {node.name}...")
     args = script.arguments
     processed_args = []
     for arg in args:
@@ -355,10 +360,10 @@ def do_script(node, which):
             processed_args.append(node.name)
         else:
             processed_args.append(arg)
-    print(f'executing {script.executable} {" ".join(processed_args)}')
+    logger.debug(f'executing {script.executable} {" ".join(processed_args)}')
     p = subprocess.run([script.executable, *processed_args], capture_output=True)
 
-    print(p)
+    logger.debug(p)
 
 
 def is_node_complete(handle):
