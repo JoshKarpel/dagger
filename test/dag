@@ -1,0 +1,6 @@
+JOB a sub
+JOB b sub
+VARS b target="b"
+SCRIPT PRE a bash pre.sh $JOB
+SCRIPT POST b bash post.sh $JOB
+PARENT a CHILD b

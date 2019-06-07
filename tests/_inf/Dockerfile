@@ -72,7 +72,7 @@ RUN cd /tmp \
  && wget --quiet https://repo.continuum.io/miniconda/Miniconda3-${MINICONDA_VERSION}-Linux-x86_64.sh \
  && bash Miniconda3-${MINICONDA_VERSION}-Linux-x86_64.sh -f -b -p $CONDA_DIR \
  && rm Miniconda3-${MINICONDA_VERSION}-Linux-x86_64.sh \
- && conda install python=${PYTHON_VERSION} ipython \
+ && conda install python=${PYTHON_VERSION} ipython line_profiler memory_profiler \
  && conda clean -y -all
 
 # install dependencies early for docker build caching

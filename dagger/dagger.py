@@ -280,13 +280,18 @@ class Executor:
         self.dag = dag
         self.max_execute_per_cycle = max_execute_per_cycle
         self.min_loop_delay = min_loop_delay
+        try:
+            self.executor_cluster_id = os.environ["CONDOR_ID"].split(".")[0]
+        except KeyError:
+            self.executor_cluster_id = "-1"
+        self.event_log_path = Path().cwd() / "dag_events.log"
 
     def execute(self):
         waiting_nodes = set(self.dag.nodes.values())
         executable_nodes = Heap(key=lambda node: node.priority)
         executing_nodes = {}
 
-        remaining_parents = {n: n.parents.copy() for n in waiting_nodes}
+        remaining_parents = {n: len(n.parents) for n in waiting_nodes}
 
         num_done = 0
 
@@ -297,12 +302,9 @@ class Executor:
             cycle = next(cycle_counter)
 
             logger.debug(f"beginning execute cycle {cycle}")
-            logger.debug(f"waiting nodes: {waiting_nodes}")
-            logger.debug(f"executable nodes: {executable_nodes}")
-            logger.debug(f"executing nodes: {executing_nodes}")
 
             for node in waiting_nodes.copy():
-                if len(remaining_parents[node]) == 0:
+                if remaining_parents[node] == 0:
                     logger.debug(f"node {node.name} can execute")
                     executable_nodes.push(node)
                     waiting_nodes.remove(node)
@@ -335,7 +337,7 @@ class Executor:
                 if self._is_node_complete(handle):
                     self._run_script(node, ScriptType.POST)
                     for child in node.children:
-                        remaining_parents[child].remove(node)
+                        remaining_parents[child] -= 1
                     executing_nodes.pop(node)
                     num_done += 1
                     logger.debug(f"node {node} is complete")
@@ -359,10 +361,9 @@ class Executor:
             sub[k] = v
 
         sub["dag_node_name"] = node.name
-        # sub['+DAGManJobId'] = # todo: get cluster
-        # sub['DAGManJobId'] = # todo: same
+        sub["+DAGManJobId"] = self.executor_cluster_id
         sub["submit_event_notes"] = f"DAG Node: {node.name}"
-        # sub['dagman_log'] = # todo: where does this come from?
+        sub["dagman_log"] = self.event_log_path.as_posix()
         # sub["+DAGManNodesMask"] = '"' # todo: getEventMask() produces this
         sub["priority"] = str(node.priority)
         # some conditional coming in to suppress node job logs
@@ -373,7 +374,7 @@ class Executor:
         # something about suppressing notifications
         # something about accounting group and user
 
-        logger.debug(f"submit description for node {node} is {sub}")
+        logger.debug(f"submit description for node {node} is\n{sub}")
 
         currdir = os.getcwd()
         if node.dir is not None:

@@ -1,0 +1,10 @@
+executable = touch.sh
+arguments = $(target)
+
+output = $(target).out
+error = $(target).err
+log = $(target).log
+
+target = a
+
+queue 1
