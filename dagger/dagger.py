@@ -286,41 +286,44 @@ class Executor:
             self.executor_cluster_id = "-1"
         self.event_log_path = Path().cwd() / "dag_events.log"
 
+        self.waiting_nodes = set(self.dag.nodes.values())
+        self.executable_nodes = Heap(key=lambda node: node.priority)
+        self.executing_nodes = {}
+        self.remaining_parents = {n: len(n.parents) for n in self.waiting_nodes}
+
     def execute(self):
-        waiting_nodes = set(self.dag.nodes.values())
-        executable_nodes = Heap(key=lambda node: node.priority)
-        executing_nodes = {}
-
-        remaining_parents = {n: len(n.parents) for n in waiting_nodes}
-
         num_done = 0
-
         cycle_counter = itertools.count()
 
-        while len(waiting_nodes) + len(executable_nodes) + len(executing_nodes) > 0:
+        while (
+            len(self.waiting_nodes)
+            + len(self.executable_nodes)
+            + len(self.executing_nodes)
+            > 0
+        ):
             cycle_start = time.time()
             cycle = next(cycle_counter)
 
             logger.debug(f"beginning execute cycle {cycle}")
 
-            for node in waiting_nodes.copy():
-                if remaining_parents[node] == 0:
+            for node in self.waiting_nodes.copy():
+                if self.remaining_parents[node] == 0:
                     logger.debug(f"node {node.name} can execute")
-                    executable_nodes.push(node)
-                    waiting_nodes.remove(node)
+                    self.executable_nodes.push(node)
+                    self.waiting_nodes.remove(node)
 
             num_executed = 0
-            while len(executable_nodes) > 0:
+            while len(self.executable_nodes) > 0:
                 if (
                     self.max_execute_per_cycle is not None
-                    and num_executed > self.max_execute_per_cycle
+                    and num_executed >= self.max_execute_per_cycle
                 ):
                     logger.debug(
                         f"not executing more nodes this cycle because hit max_execute_per_cycle ({self.max_execute_per_cycle})"
                     )
                     break
 
-                node = executable_nodes.pop()
+                node = self.executable_nodes.pop()
                 logger.debug(f"executing node {node} with priority {node.priority}")
 
                 if node.noop:
@@ -330,15 +333,16 @@ class Executor:
                     self._run_script(node, ScriptType.PRE)
                     handle = self._run_node(node)
 
-                executing_nodes[node] = handle
+                logger.debug(f"handle for node {node} is {handle}")
+                self.executing_nodes[node] = handle
                 num_executed += 1
 
-            for node, handle in executing_nodes.copy().items():
+            for node, handle in self.executing_nodes.copy().items():
                 if self._is_node_complete(handle):
                     self._run_script(node, ScriptType.POST)
                     for child in node.children:
-                        remaining_parents[child] -= 1
-                    executing_nodes.pop(node)
+                        self.remaining_parents[child] -= 1
+                    self.executing_nodes.pop(node)
                     num_done += 1
                     logger.debug(f"node {node} is complete")
                 else:
@@ -360,21 +364,9 @@ class Executor:
         for k, v in node.vars.items():
             sub[k] = v
 
-        sub["dag_node_name"] = node.name
-        sub["+DAGManJobId"] = self.executor_cluster_id
-        sub["submit_event_notes"] = f"DAG Node: {node.name}"
-        sub["dagman_log"] = self.event_log_path.as_posix()
-        # sub["+DAGManNodesMask"] = '"' # todo: getEventMask() produces this
-        sub["priority"] = str(node.priority)
-        # some conditional coming in to suppress node job logs
-        sub["+DAGParentNodeNames"] = f"\"{' '.join(n.name for n in node.parents)}\""
-        # something about DAG_STATUS
-        # something about FAILED_COUNT
-        # something about holding claims
-        # something about suppressing notifications
-        # something about accounting group and user
+        self._inject_submit_descriptors(node, sub)
 
-        logger.debug(f"submit description for node {node} is\n{sub}")
+        # logger.debug(f"submit description for node {node} is\n{sub}")
 
         currdir = os.getcwd()
         if node.dir is not None:
@@ -387,9 +379,23 @@ class Executor:
         os.chdir(currdir)
 
         handle = jobs.ClusterHandle(result)
-        logger.debug(f"handle is {handle}")
 
         return handle
+
+    def _inject_submit_descriptors(self, node, submit):
+        submit["dag_node_name"] = node.name
+        submit["+DAGManJobId"] = self.executor_cluster_id
+        submit["submit_event_notes"] = f"DAG Node: {node.name}"
+        submit["dagman_log"] = self.event_log_path.as_posix()
+        # sub["+DAGManNodesMask"] = '"' # todo: getEventMask() produces this
+        submit["priority"] = str(node.priority)
+        # some conditional coming in to suppress node job logs
+        submit["+DAGParentNodeNames"] = f"\"{' '.join(n.name for n in node.parents)}\""
+        # something about DAG_STATUS
+        # something about FAILED_COUNT
+        # something about holding claims
+        # something about suppressing notifications
+        # something about accounting group and user
 
     def _run_script(self, node: Node, which: ScriptType):
         try:
@@ -416,3 +422,16 @@ class Executor:
         if handle is None:  # no handle means noop node
             return True
         return handle.state.is_complete()
+
+
+class MockExecutor(Executor):
+    def _inject_submit_descriptors(self, node, submit):
+        super()._inject_submit_descriptors(node, submit)
+
+        submit["hold"] = "true"
+        submit["skip_filechecks"] = "true"
+
+    def _is_node_complete(self, handle):
+        if handle is not None:
+            handle.remove()
+        return True

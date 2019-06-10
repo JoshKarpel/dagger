@@ -5,4 +5,4 @@ CONTAINER_TAG=dagger-tests
 set -e
 echo "Building dagger testing container..."
 docker build --quiet -t ${CONTAINER_TAG} --file tests/_inf/Dockerfile .
-docker run -it --rm ${CONTAINER_TAG} $@
+docker run -it --rm -v ${PWD}/test:/home/dagger/dagger/test ${CONTAINER_TAG} $@

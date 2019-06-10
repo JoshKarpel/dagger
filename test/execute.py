@@ -3,6 +3,8 @@
 import logging
 from pathlib import Path
 import sys
+import gc
+import time
 
 import dagger
 
@@ -16,11 +18,15 @@ dag_logger = logging.getLogger("dagger")
 dag_logger.addHandler(handler)
 dag_logger.setLevel(logging.DEBUG)
 
-dag = dagger.DAG.from_file(Path("dag"))
-for k, v in dag.nodes.items():
-    print(v.description())
+dag = dagger.DAG.from_file(Path("good.ldag"))
 
-executor = dagger.Executor(dag)
+# for k, v in dag.nodes.items():
+#     print(v.description())
+
+executor = dagger.MockExecutor(dag, max_execute_per_cycle=None)
 num = executor.execute()
 
 print(f"EXECUTED {num} NODES")
+time.sleep(10)
+gc.collect()
+time.sleep(10)
