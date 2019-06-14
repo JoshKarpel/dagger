@@ -18,7 +18,7 @@ dag_logger = logging.getLogger("dagger")
 dag_logger.addHandler(handler)
 dag_logger.setLevel(logging.DEBUG)
 
-dag = dagger.DAG.from_file(Path("good.ldag"))
+dag = dagger.DAGCommandParser.parse_file(Path("good.ldag"))
 
 # for k, v in dag.nodes.items():
 #     print(v.description())
