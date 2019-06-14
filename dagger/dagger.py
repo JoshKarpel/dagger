@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typing import Optional
 import logging
 
 import os
@@ -45,18 +46,14 @@ CMD_REGEXES = dict(
         r"^JOB\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
         re.IGNORECASE,
     ),
-    data=re.compile(
-        r"^DATA\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
-        re.IGNORECASE,
-    ),
-    subdag=re.compile(
-        r"^SUBDAG\s+EXTERNAL\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
-        re.IGNORECASE,
-    ),
-    splice=re.compile(
-        r"^SPLICE\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?",
-        re.IGNORECASE,
-    ),
+    # subdag=re.compile(
+    #     r"^SUBDAG\s+EXTERNAL\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
+    #     re.IGNORECASE,
+    # ),
+    # splice=re.compile(
+    #     r"^SPLICE\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?",
+    #     re.IGNORECASE,
+    # ),
     priority=re.compile(r"^PRIORITY\s+(?P<name>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
     category=re.compile(
         r"^CATEGORY\s+(?P<name>\S+)\s+(?P<category>\S+)", re.IGNORECASE
@@ -70,7 +67,7 @@ CMD_REGEXES = dict(
         r"^SCRIPT\s+(?P<type>(PRE)|(POST))\s(?P<name>\S+)\s+(?P<executable>\S+)(\s+(?P<arguments>.+))?",
         re.IGNORECASE,
     ),
-    abortdagon=re.compile(
+    abort_dag_on=re.compile(
         r"^ABORT-DAG-ON\s+(?P<name>\S+)\s+(?P<exitvalue>\S+)(\s+RETURN\s+(?P<returnvalue>\S+))?",
         re.IGNORECASE,
     ),
@@ -79,9 +76,9 @@ CMD_REGEXES = dict(
     ),
     maxjobs=re.compile(r"^MAXJOBS\s+(?P<category>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
     config=re.compile(r"^CONFIG\s+(?P<filename>\S+)", re.IGNORECASE),
-    nodestatus=re.compile(
-        r"^NODE_STATUS_FILE\s+(?P<filename>\S+)(\s+(?P<updatetime>\S+))?", re.IGNORECASE
-    ),
+    # nodestatus=re.compile(
+    #     r"^NODE_STATUS_FILE\s+(?P<filename>\S+)(\s+(?P<updatetime>\S+))?", re.IGNORECASE
+    # ),
     jobstate=re.compile(r"^JOBSTATE_LOG\s+(?P<filename>\S+)", re.IGNORECASE),
 )
 
@@ -92,29 +89,39 @@ class DAG:
     def __init__(self):
         self.nodes = NodeDict()
         self.jobstate_log = None
+        self.max_jobs_per_category = {}
+        self.config_file = None
+        self.dot_config = None
 
     @classmethod
-    def from_file(cls, path: Path):
+    def from_file(cls, path: os.PathLike):
         path = Path(path)
         dag = cls()
 
         with path.open(mode="r") as f:
             for line_number, line in enumerate(f, start=1):
-                dag._process_line(line, line_number)
+                dag.parse_line(line, line_number)
 
         return dag
 
-    def _process_line(self, line, line_number):
+    def parse_line(self, line, line_number=0):
+        line = line.strip()
+
         if line.startswith("#"):
+            return
+
+        if line == "":
             return
 
         for cmd, pattern in CMD_REGEXES.items():
             match = pattern.search(line)
             if match is not None:
-                getattr(self, f"_process_{cmd}", lambda m, l: print(cmd, l))(
+                getattr(self, f"_process_{cmd}", lambda m, l: (print(m, l), 1 / 0))(
                     match, line_number
                 )
-                break
+                return
+
+        raise Exception(f"unrecognized command on line {line_number}: {line}")
 
     def _process_job(self, match, line_number):
         node = self.nodes[match.group("name")]
@@ -170,6 +177,72 @@ class DAG:
             arguments=args.split() if args is not None else None,
         )
 
+    def _process_abort_dag_on(self, match, line_number):
+        node = self.nodes[match.group("name")]
+
+        self.nodes[node].abort = DAGAbortCondition(
+            node_exit_value=match.group("exitvalue"),
+            dag_return_value=match.group("returnvalue"),
+        )
+
+    def _process_category(self, match, line_number):
+        node = self.nodes[match.group("name")]
+
+        node.category = match.group("category")
+
+    def _process_maxjobs(self, match, line_number):
+        self.max_jobs_per_category[match.group("category")] = match.group("value")
+
+    def _process_config(self, match, line_number):
+        self.config_file = match.group("filename")
+
+    def _process_dot(self, match, line_number):
+        path = match.group("filename")
+
+        options = (match.group("options") or "").split()
+        kwargs = {}
+        while len(options) > 0:
+            option = options.pop(0).upper()
+            if option == "UPDATE":
+                kwargs["update"] = True
+            elif option == "DONT-UPDATE":
+                kwargs["update"] = False
+            elif option == "OVERWRITE":
+                kwargs["overwrite"] = True
+            elif option == "DONT-OVERWRITE":
+                kwargs["overwrite"] = False
+            elif option == "INCLUDE":
+                try:
+                    kwargs["include_file"] = options.pop(0)
+                except IndexError:
+                    raise Exception(
+                        f"line {line_number}: missing filename for INCLUDE option of DOT"
+                    )
+            else:
+                raise Exception(f"unrecognized option {option} for DOT")
+
+            self.dot_config = DotConfig(path, **kwargs)
+
+
+class DAGAbortCondition:
+    def __init__(self, node_exit_value, dag_return_value):
+        self.node_exit_value = node_exit_value
+        self.dag_return_value = dag_return_value
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(node_exit_value = {self.node_exit_value}, dag_return_value = {self.dag_return_value})"
+
+
+class DotConfig:
+    def __init__(self, path, update=False, overwrite=True, include_file=None):
+        self.path = path
+        self.update = update
+        self.overwrite = overwrite
+        self.include_file = include_file
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(update = {self.update}, overwrite = {self.overwrite}, include = {self.include_file})"
+
 
 class Node:
     def __init__(
@@ -185,6 +258,8 @@ class Node:
         parents=None,
         children=None,
         priority=0,
+        category=None,
+        abort=None,
     ):
         self.name = name
         self.submit_file = Path(submit_file) if submit_file is not None else None
@@ -195,11 +270,21 @@ class Node:
         self.retries = retries
         self.retry_unless_exit = retry_unless_exit
         self.priority = priority
+        self.category = category
+        self.abort = abort
 
         self.scripts = {}
 
         self.parents = parents or set()
         self.children = children or set()
+
+    @property
+    def submit_file(self):
+        return self._submit_file
+
+    @submit_file.setter
+    def submit_file(self, path: Optional[Path]):
+        self._submit_file = Path(path) if path is not None else None
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.name})"
