@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
+from typing import Optional, MutableMapping
 import logging
 
 import os
@@ -76,10 +76,10 @@ CMD_REGEXES = dict(
     ),
     maxjobs=re.compile(r"^MAXJOBS\s+(?P<category>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
     config=re.compile(r"^CONFIG\s+(?P<filename>\S+)", re.IGNORECASE),
-    # nodestatus=re.compile(
-    #     r"^NODE_STATUS_FILE\s+(?P<filename>\S+)(\s+(?P<updatetime>\S+))?", re.IGNORECASE
-    # ),
-    jobstate=re.compile(r"^JOBSTATE_LOG\s+(?P<filename>\S+)", re.IGNORECASE),
+    node_status_file=re.compile(
+        r"^NODE_STATUS_FILE\s+(?P<filename>\S+)(\s+(?P<updatetime>\S+))?", re.IGNORECASE
+    ),
+    jobstate_log=re.compile(r"^JOBSTATE_LOG\s+(?P<filename>\S+)", re.IGNORECASE),
 )
 
 EXTRACT_VARS = re.compile(r'(?P<key>\S+)\s*=\s*"(?P<value>.*?)(?<!\\)"', re.IGNORECASE)
@@ -87,11 +87,12 @@ EXTRACT_VARS = re.compile(r'(?P<key>\S+)\s*=\s*"(?P<value>.*?)(?<!\\)"', re.IGNO
 
 class DAG:
     def __init__(self):
-        self.nodes = NodeDict()
+        self.nodes: MutableMapping[str, Node] = NodeDict()
         self.jobstate_log = None
         self.max_jobs_per_category = {}
         self.config_file = None
         self.dot_config = None
+        self.node_status_file = None
 
     @classmethod
     def from_file(cls, path: os.PathLike):
@@ -116,9 +117,7 @@ class DAG:
         for cmd, pattern in CMD_REGEXES.items():
             match = pattern.search(line)
             if match is not None:
-                getattr(self, f"_process_{cmd}", lambda m, l: (print(m, l), 1 / 0))(
-                    match, line_number
-                )
+                getattr(self, f"_process_{cmd}")(match, line_number)
                 return
 
         raise Exception(f"unrecognized command on line {line_number}: {line}")
@@ -160,7 +159,7 @@ class DAG:
         node = self.nodes[match.group("name")]
         node.priority = int(match.group("value"))
 
-    def _process_jobstate(self, match, line_number):
+    def _process_jobstate_log(self, match, line_number):
         if self.jobstate_log is None:
             self.jobstate_log = match.group("filename")
 
@@ -180,7 +179,7 @@ class DAG:
     def _process_abort_dag_on(self, match, line_number):
         node = self.nodes[match.group("name")]
 
-        self.nodes[node].abort = DAGAbortCondition(
+        node.abort = DAGAbortCondition(
             node_exit_value=match.group("exitvalue"),
             dag_return_value=match.group("returnvalue"),
         )
@@ -222,6 +221,23 @@ class DAG:
                 raise Exception(f"unrecognized option {option} for DOT")
 
             self.dot_config = DotConfig(path, **kwargs)
+
+    def _process_node_status_file(self, match, line_number):
+        path = match.group("filename")
+        update_time = match.group("updatetime")
+        if update_time != "ALWAYS-UPDATE":
+            update_time = int(match.group("updatetime"))
+
+        self.node_status_file = NodeStatusFile(path=path, update_time=update_time)
+
+
+class NodeStatusFile:
+    def __init__(self, path, update_time=None):
+        self.path = path
+        self.update_time = update_time
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(path = {self.path}, update_time = {self.update_time})"
 
 
 class DAGAbortCondition:
