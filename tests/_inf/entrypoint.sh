@@ -23,4 +23,6 @@ else
     echo "Executing default test command in container..."
 fi
 
+pip install -e /home/dagger/dagger
+
 exec "$@"

@@ -109,12 +109,8 @@ class DAGCommandParser:
             d.node(**node.to_node_kwargs())
 
         for name, node in self.nodes.items():
-            d.nodes[name].children.update(
-                {n.name: d.nodes[n.name] for n in node.children}
-            )
-            d.nodes[name].parents.update(
-                {n.name: d.nodes[n.name] for n in node.parents}
-            )
+            d.nodes[name].children.add(*(d.nodes[n.name] for n in node.children))
+            d.nodes[name].parents.add(*(d.nodes[n.name] for n in node.parents))
 
         return d
 

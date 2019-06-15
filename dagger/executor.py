@@ -26,7 +26,6 @@ import sys
 import time
 import heapq
 import subprocess
-from copy import copy
 
 import htcondor
 import htcondor_jobs as jobs
@@ -68,10 +67,13 @@ class Executor:
             self.executor_cluster_id = "-1"
         self.event_log_path = Path().cwd() / "dag_events.log"
 
-        self.waiting_nodes = set(self.dag.nodes.values())
+        self.waiting_nodes = set(self.dag.nodes)
         self.executable_nodes = Heap(key=lambda node: node.priority)
         self.executing_nodes = {}
         self.remaining_parents = {n: len(n.parents) for n in self.waiting_nodes}
+
+        self.handle_dir = Path.cwd() / "handles"
+        self.handle_dir.mkdir(exist_ok=True)
 
     def execute(self):
         num_done = 0
@@ -142,7 +144,15 @@ class Executor:
         return num_done
 
     def _run_node(self, node: dag.Node):
-        sub = copy(node.submit_description)
+        handle_path = self.handle_dir / node.name
+        try:
+            handle = jobs.ClusterHandle.load(handle_path)
+            logger.debug(f"recovered handle {handle} for node {node}")
+            return handle
+        except (FileNotFoundError,):
+            pass
+
+        sub = htcondor.Submit(dict(node.submit_description))
         for k, v in node.vars.items():
             sub[k] = v
 
@@ -161,6 +171,8 @@ class Executor:
         os.chdir(currdir)
 
         handle = jobs.ClusterHandle(result)
+
+        handle.save(handle_path)
 
         return handle
 

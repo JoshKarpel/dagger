@@ -94,6 +94,6 @@ COPY tests/_inf/condor_config.local /etc/condor/condor_config.local
 COPY --chown=dagger:dagger . /home/${SUBMIT_USER}/dagger
 WORKDIR /home/${SUBMIT_USER}/dagger
 RUN chmod +x /home/${SUBMIT_USER}/dagger/tests/_inf/entrypoint.sh /home/${SUBMIT_USER}/dagger/tests/travis.sh \
- && pip install --no-cache-dir --no-deps -e . \
+# && pip install --no-cache-dir --no-deps -e . \
  && pip install --no-cache-dir git+https://github.com/JoshKarpel/htcondor-jobs.git@job-state
 
