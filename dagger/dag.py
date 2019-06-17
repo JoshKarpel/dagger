@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, MutableMapping, List, Dict, Iterable
+from typing import Optional, MutableMapping, List, Dict, Iterable, Union
 import logging
 
 import os
@@ -67,20 +67,18 @@ class DAG:
         return node
 
     def select(self, pattern):
-        return Nodes(
+        yield from (
             node
             for name, node in self._nodes.items()
             if fnmatch.fnmatchcase(name, pattern)
         )
 
+    def roots(self):
+        yield from (node for node in self.nodes if len(node.parents) == 0)
+
     def walk(self, order: WalkOrder = WalkOrder.DEPTH_FIRST):
         seen = set()
-        stack = collections.deque(
-            sorted(
-                (node for node in self.nodes if len(node.parents) == 0),
-                key=lambda node: node.name,
-            )
-        )
+        stack = collections.deque(self.roots())
 
         while len(stack) != 0:
             if order is WalkOrder.DEPTH_FIRST:
@@ -99,9 +97,10 @@ class DAG:
 
 
 class NodeStatusFile:
-    def __init__(self, path, update_time=None):
+    def __init__(self, path, update_time=None, always_update=False):
         self.path = path
         self.update_time = update_time
+        self.always_update = always_update
 
     def __repr__(self):
         return f"{self.__class__.__name__}(path = {self.path}, update_time = {self.update_time})"
@@ -189,11 +188,12 @@ class Node:
         dag: DAG,
         *,
         name: str,
+        postfix_format="{:d}",
         submit_description: Optional[htcondor.Submit] = None,
         dir: Optional[os.PathLike] = None,
         noop: bool = False,
         done: bool = False,
-        vars: Optional[Dict[str, str]] = None,
+        vars: Optional[Union[Dict[str, str], Iterable[Dict[str, str]]]] = None,
         retries: Optional[int] = 0,
         retry_unless_exit: Optional[int] = None,
         pre: Optional[Script] = None,
@@ -205,11 +205,17 @@ class Node:
         self._dag = dag
 
         self.name = name
+        self.postfix_format = postfix_format
+
         self.submit_description = submit_description or htcondor.Submit({})
         self.dir = Path(dir) if dir is not None else dir
         self.noop = noop
         self.done = done
-        self.vars = vars or {}
+
+        if vars is None:
+            vars = [{}]
+        self.vars = list(vars)
+
         self.retries = retries
         self.retry_unless_exit = retry_unless_exit
         self.priority = priority
@@ -250,20 +256,30 @@ class Node:
 
         return node
 
-
-class Nodes:
-    def __init__(self, nodes):
-        self._nodes = set(nodes)
-        self._dag = next(iter(self._nodes))._dag
-
-    def child(self, **kwargs):
+    def parent(self, **kwargs):
         node = self._dag.node(**kwargs)
 
-        node.parents.add(*self._nodes)
-        for parent in self:
-            parent.children.add(node)
+        node.children.add(self)
+        self.parents.add(node)
 
         return node
 
-    def __iter__(self):
-        yield from self._nodes
+    def add_children(self, *nodes):
+        self.children.add(*nodes)
+        for node in nodes:
+            node.parents.add(self)
+
+    def remove_children(self, *nodes):
+        self.children.remove(*nodes)
+        for node in nodes:
+            node.parents.remove(self)
+
+    def add_parents(self, *nodes):
+        self.parents.add(*nodes)
+        for node in nodes:
+            node.children.add(self)
+
+    def remove_parents(self, *nodes):
+        self.parents.remove(*nodes)
+        for node in nodes:
+            node.children.remove(self)
