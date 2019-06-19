@@ -58,7 +58,7 @@ CMD_REGEXES = dict(
     ),
     vars=re.compile(r"^VARS\s+(?P<name>\S+)\s+(?P<vars>.+)", re.IGNORECASE),
     script=re.compile(
-        r"^SCRIPT\s+(?P<type>(PRE)|(POST))\s(?P<name>\S+)\s+(?P<executable>\S+)(\s+(?P<arguments>.+))?",
+        r"^SCRIPT\s+(DEFER\s+(?P<defer_status>\d+)\s+(?P<defer_delay>\d+)\s+)?(?P<type>(PRE)|(POST))\s+(?P<name>\S+)\s+(?P<executable>\S+)(\s+(?P<arguments>.+))?",
         re.IGNORECASE,
     ),
     abort_dag_on=re.compile(
@@ -193,6 +193,9 @@ class DAGCommandParser:
             dag.Script(
                 executable=match.group("executable"),
                 arguments=args.split() if args is not None else None,
+                retry=True if match.group("defer_status") is not None else None,
+                retry_status=match.group("defer_status"),
+                retry_delay=match.group("defer_delay"),
             ),
         )
 
