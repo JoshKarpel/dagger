@@ -193,7 +193,7 @@ class DAGCommandParser:
             dag.Script(
                 executable=match.group("executable"),
                 arguments=args.split() if args is not None else None,
-                retry=True if match.group("defer_status") is not None else None,
+                retry=True if match.group("defer_status") is not None else False,
                 retry_status=match.group("defer_status"),
                 retry_delay=match.group("defer_delay"),
             ),

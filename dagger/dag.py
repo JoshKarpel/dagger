@@ -140,7 +140,7 @@ class Script:
         self.arguments = arguments
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(executable = {self.executable}, arguments = {self.arguments}, retry_status = {self.retry_status}, retry_delay = {self.retry_delay})"
+        return f"{self.__class__.__name__}(executable = {self.executable}, arguments = {self.arguments}, retry = {self.retry}, retry_status = {self.retry_status}, retry_delay = {self.retry_delay})"
 
 
 class NodeStore:
