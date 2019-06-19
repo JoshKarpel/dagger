@@ -41,32 +41,41 @@ SEPARATOR = ":"
 
 
 class DAGWriter:
-    def __init__(self, dag, path):
-        self.dag = dag
-        self.path = path
-        self.join_counter = None
+    """Not re-entrant!"""
 
-    def write(self):
-        self.path.mkdir(parents=True, exist_ok=True)
+    def __init__(self, dag):
+        self.dag = dag
         self.join_counter = itertools.count()
 
-        with (self.path / "dagfile.dag").open(mode="w") as f:
-            f.write("# BEGIN CONFIG\n")
-            for line in itertools.chain(self._get_dag_config_lines()):
+        self.noop_sub_name = "__JOIN__.sub"
+
+    def write(self, path):
+        path.mkdir(parents=True, exist_ok=True)
+        with (path / "dagfile.dag").open(mode="w") as f:
+            for line in self.get_lines():
                 f.write(line)
                 f.write("\n")
+        for node in self.dag.nodes:
+            self.write_submit_file(node, path)
 
-            f.write("# END CONFIG\n")
-            f.write("# BEGIN NODES AND EDGES\n")
-            for node in self.dag.walk(order=WalkOrder.BREADTH_FIRST):
-                self.write_submit_file(node)
+        (path / self.noop_sub_name).touch(exist_ok=True)
 
-                for line in itertools.chain(
-                    self._get_node_lines(node), self._get_edge_lines(node)
-                ):
-                    f.write(line)
-                    f.write("\n")
-            f.write("# END NODES AND EDGES\n")
+    def write_submit_file(self, node, path):
+        (path / f"{node.name}.sub").write_text(str(node.submit_description))
+
+    def get_lines(self):
+        yield "# BEGIN CONFIG"
+        for line in itertools.chain(self._get_dag_config_lines()):
+            yield line
+
+        yield "# END CONFIG"
+        yield "# BEGIN NODES AND EDGES"
+        for node in self.dag.walk(order=WalkOrder.BREADTH_FIRST):
+            for line in itertools.chain(
+                self._get_node_lines(node), self._get_edge_lines(node)
+            ):
+                yield line
+        yield "# END NODES AND EDGES"
 
     def _get_dag_config_lines(self):
         if self.dag.config_file is not None:
@@ -99,13 +108,17 @@ class DAGWriter:
         for category, value in self.dag.max_jobs_per_category:
             yield f"CATEGORY {category} {value}"
 
-    def write_submit_file(self, node):
-        (self.path / f"{node.name}.sub").write_text(str(node.submit_description))
-
     def _get_node_lines(self, node):
         for idx, v in enumerate(node.vars):
             name = f"{node.name}{SEPARATOR}{node.postfix_format.format(idx)}"
-            yield f"JOB {name}"
+            parts = [f"JOB {name}"]
+            if node.dir is not None:
+                parts.extend(("DIR", str(node.dir)))
+            if node.noop:
+                parts.append("NOOP")
+            if node.done:
+                parts.append("DONE")
+            yield " ".join(parts)
 
             if len(v) > 0:
                 parts = [f"VARS {name}"]
@@ -114,10 +127,28 @@ class DAGWriter:
                     parts.append(f'{key} = "{value_text}"')
                 yield " ".join(parts)
 
+            if node.retries is not None:
+                parts = [f"RETRY {name} {node.retries}"]
+                if node.retry_unless_exit is not None:
+                    parts.append(f"UNLESS-EXIT {node.retry_unless_exit}")
+                yield " ".join(parts)
+
             if node.pre is not None:
                 yield from self._get_script_line(name, node.pre, "PRE")
             if node.post is not None:
                 yield from self._get_script_line(name, node.post, "POST")
+
+            if node.priority != 0:
+                yield f"PRIORITY {name} {node.priority}"
+
+            if node.category is not None:
+                yield f"CATEGORY {name} {node.category}"
+
+            if node.abort is not None:
+                parts = [f"ABORT-DAG-ON {name} {node.abort.node_exit_value}"]
+                if node.abort.dag_return_value is not None:
+                    parts.append(f"RETURN {node.abort.dag_return_value}")
+                yield " ".join(parts)
 
     def _get_script_line(self, name, script, which):
         parts = ["SCRIPT"]
@@ -152,8 +183,6 @@ class DAGWriter:
                 yield f"PARENT {' '.join(parents)} CHILD {' '.join(children)}"
             else:
                 join_name = f"__JOIN~{next(self.join_counter)}__"
-                noop_sub_name = "__JOIN__.sub"
-                (self.path / noop_sub_name).touch(exist_ok=True)
-                yield f"JOB {join_name} {noop_sub_name} NOOP"
+                yield f"JOB {join_name} {self.noop_sub_name} NOOP"
                 yield f"PARENT {' '.join(parents)} CHILD {join_name}"
                 yield f"PARENT {join_name} CHILD {' '.join(children)}"

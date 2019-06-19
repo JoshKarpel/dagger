@@ -107,7 +107,7 @@ class NodeStatusFile:
 
 
 class DAGAbortCondition:
-    def __init__(self, node_exit_value, dag_return_value):
+    def __init__(self, node_exit_value, dag_return_value=None):
         self.node_exit_value = node_exit_value
         self.dag_return_value = dag_return_value
 
