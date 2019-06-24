@@ -67,14 +67,16 @@ class DAG:
         return node
 
     def select(self, pattern):
-        yield from (
-            node
-            for name, node in self._nodes.items()
-            if fnmatch.fnmatchcase(name, pattern)
+        return Nodes(
+            *(
+                node
+                for name, node in self._nodes.items()
+                if fnmatch.fnmatchcase(name, pattern)
+            )
         )
 
     def roots(self):
-        yield from (node for node in self.nodes if len(node.parents) == 0)
+        return Nodes(*(node for node in self.nodes if len(node.parents) == 0))
 
     def walk(self, order: WalkOrder = WalkOrder.DEPTH_FIRST):
         seen = set()
@@ -283,3 +285,70 @@ class Node:
         self.parents.remove(*nodes)
         for node in nodes:
             node.children.remove(self)
+
+
+class Nodes:
+    def __init__(self, *nodes):
+        self.nodes = set()
+        for node in nodes:
+            if isinstance(node, Node):
+                self.nodes.add(node)
+            else:
+                self.nodes.update(node)
+
+    def __iter__(self):
+        yield from self.nodes
+
+    def __contains__(self, node):
+        return node in self.nodes or node.name in (n.name for n in self.nodes)
+
+    def __repr__(self):
+        return f"Nodes({', '.join(repr(n) for n in sorted(self.nodes, key = lambda n: n.name))})"
+
+    def __str__(self):
+        return f"Nodes({', '.join(str(n) for n in sorted(self.nodes, key = lambda n: n.name))})"
+
+    def _some_element(self):
+        return next(iter(self.nodes))
+
+    def child(self, **kwargs):
+        node = self._some_element().child(**kwargs)
+
+        for s in self:
+            node.parents.add(s)
+            s.children.add(node)
+
+        return node
+
+    def parent(self, **kwargs):
+        node = self._some_element().child(**kwargs)
+
+        for s in self:
+            node.children.add(self)
+            s.parents.add(node)
+
+        return node
+
+    def add_children(self, *nodes):
+        for s in self:
+            s.children.add(*nodes)
+            for node in nodes:
+                node.parents.add(s)
+
+    def remove_children(self, *nodes):
+        for s in self:
+            s.children.remove(*nodes)
+            for node in nodes:
+                node.parents.remove(s)
+
+    def add_parents(self, *nodes):
+        for s in self:
+            s.parents.add(*nodes)
+            for node in nodes:
+                node.children.add(s)
+
+    def remove_parents(self, *nodes):
+        for s in self:
+            s.parents.remove(*nodes)
+            for node in nodes:
+                node.children.remove(s)
