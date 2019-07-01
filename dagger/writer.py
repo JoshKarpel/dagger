@@ -16,21 +16,7 @@
 from typing import Optional, MutableMapping, List, Dict, Iterable, Union
 import logging
 
-import os
-import collections
-import enum
 import itertools
-from pathlib import Path
-import re
-import sys
-import time
-import heapq
-import subprocess
-import collections.abc
-import fnmatch
-
-import htcondor
-import htcondor_jobs as jobs
 
 from .dag import WalkOrder
 
@@ -137,6 +123,9 @@ class DAGWriter:
                 yield from self._get_script_line(name, node.pre, "PRE")
             if node.post is not None:
                 yield from self._get_script_line(name, node.post, "POST")
+
+            if node.pre_skip_exit_code is not None:
+                yield f"PRE_SKIP {name} {node.pre_skip_exit_code}"
 
             if node.priority != 0:
                 yield f"PRIORITY {name} {node.priority}"

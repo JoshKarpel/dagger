@@ -143,7 +143,7 @@ class Executor:
 
         return num_done
 
-    def _run_node(self, node: dag.JobNode):
+    def _run_node(self, node: dag.NodeSet):
         handle_path = self.handle_dir / node.name
         try:
             handle = jobs.ClusterHandle.load(handle_path)

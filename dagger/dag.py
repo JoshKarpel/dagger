@@ -19,10 +19,12 @@ import logging
 import os
 import collections
 import itertools
+import functools
 import enum
 from pathlib import Path
 import collections.abc
 import fnmatch
+import abc
 
 import htcondor
 
@@ -59,12 +61,12 @@ class DAG:
         return node in self._nodes
 
     def node(self, **kwargs):
-        node = JobNode(dag=self, **kwargs)
+        node = NodeSet(dag=self, **kwargs)
         self.nodes.add(node)
         return node
 
     def subdag(self, **kwargs):
-        node = SubDagNode(dag=self, **kwargs)
+        node = SubDag(dag=self, **kwargs)
         self.nodes.add(node)
         return node
 
@@ -153,7 +155,7 @@ class NodeStore:
 
     def add(self, *nodes):
         for node in nodes:
-            if isinstance(node, Node):
+            if isinstance(node, BaseNode):
                 self.nodes[node.name] = node
             elif isinstance(node, Nodes):
                 self.nodes.update({n.name: n for n in node})
@@ -164,7 +166,7 @@ class NodeStore:
         for node in nodes:
             if isinstance(node, str):
                 self.nodes.pop(node, None)
-            elif isinstance(node, Node):
+            elif isinstance(node, BaseNode):
                 self.nodes.pop(node.name, None)
             elif isinstance(node, Nodes):
                 for n in node:
@@ -173,7 +175,7 @@ class NodeStore:
     def __getitem__(self, node):
         if isinstance(node, str):
             return self.nodes[node]
-        elif isinstance(node, JobNode):
+        elif isinstance(node, NodeSet):
             return self.nodes[node.name]
         else:
             raise KeyError()
@@ -182,7 +184,7 @@ class NodeStore:
         yield from self.nodes.values()
 
     def __contains__(self, node):
-        if isinstance(node, JobNode):
+        if isinstance(node, NodeSet):
             return node in self.nodes.values()
         elif isinstance(node, str):
             return node in self.nodes.keys()
@@ -205,7 +207,8 @@ def flatten(nested_iterable) -> List[Any]:
     return list(itertools.chain.from_iterable(nested_iterable))
 
 
-class Node:
+@functools.total_ordering
+class BaseNode(abc.ABC):
     def __init__(
         self,
         dag,
@@ -217,6 +220,7 @@ class Node:
         retries: Optional[int] = 0,
         retry_unless_exit: Optional[int] = None,
         pre: Optional[Script] = None,
+        pre_skip_exit_code=None,
         post: Optional[Script] = None,
         priority: int = 0,
         category: Optional[str] = None,
@@ -228,7 +232,7 @@ class Node:
         self.parents = NodeStore()
         self.children = NodeStore()
 
-        self.dir = Path(dir) if dir is not None else dir
+        self.dir = Path(dir) if dir is not None else None
         self.noop = noop
         self.done = done
 
@@ -239,6 +243,7 @@ class Node:
         self.abort = abort
 
         self.pre = pre
+        self.pre_skip_exit_code = pre_skip_exit_code
         self.post = post
 
     def __repr__(self):
@@ -255,13 +260,13 @@ class Node:
         return hash((self.__class__, self.name))
 
     def __eq__(self, other):
-        return isinstance(other, JobNode) and self.name == other.name
+        if not isinstance(other, self.__class__):
+            return NotImplemented
+        return self.name == other.name
 
     def __lt__(self, other):
-        if not isinstance(other, JobNode):
-            raise TypeError(
-                f"{self.__class__.__name__} does not support < with {other.__class__.__name__}"
-            )
+        if not isinstance(other, NodeSet):
+            return NotImplemented
         return self.name < other.name
 
     def child(self, **kwargs):
@@ -305,14 +310,14 @@ class Node:
             node.children.remove(self)
 
 
-class JobNode(Node):
+class NodeSet(BaseNode):
     def __init__(
         self,
         dag: DAG,
         *,
         postfix_format="{:d}",
         submit_description: Optional[htcondor.Submit] = None,
-        vars: Optional[Union[Dict[str, str], Iterable[Dict[str, str]]]] = None,
+        vars: Optional[Iterable[Dict[str, str]]] = None,
         **kwargs,
     ):
         super().__init__(dag, **kwargs)
@@ -326,7 +331,7 @@ class JobNode(Node):
         self.vars = list(vars)
 
 
-class SubDagNode(Node):
+class SubDag(BaseNode):
     def __init__(self, dag: DAG, *, dag_file: Path, **kwargs):
         super().__init__(dag, **kwargs)
 
