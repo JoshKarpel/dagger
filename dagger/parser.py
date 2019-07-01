@@ -13,22 +13,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, MutableMapping, List
+from typing import Optional, MutableMapping
 import logging
 
 import os
 import collections
-import enum
 import itertools
 from pathlib import Path
 import re
-import sys
-import time
-import heapq
-import subprocess
+import enum
 
 import htcondor
-import htcondor_jobs as jobs
 
 from . import dag
 
@@ -75,10 +70,10 @@ CMD_REGEXES = dict(
         r"^NODE_STATUS_FILE\s+(?P<filename>\S+)(\s+(?P<updatetime>\S+))?", re.IGNORECASE
     ),
     jobstate_log=re.compile(r"^JOBSTATE_LOG\s+(?P<filename>\S+)", re.IGNORECASE),
-    # subdag=re.compile(
-    #     r"^SUBDAG\s+EXTERNAL\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
-    #     re.IGNORECASE,
-    # ),
+    subdag=re.compile(
+        r"^SUBDAG\s+EXTERNAL\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?(\s+(?P<noop>NOOP))?(\s+(?P<done>DONE))?",
+        re.IGNORECASE,
+    ),
     # splice=re.compile(
     #     r"^SPLICE\s+(?P<name>\S+)\s+(?P<filename>\S+)(\s+DIR\s+(?P<directory>\S+))?",
     #     re.IGNORECASE,
@@ -107,7 +102,12 @@ class DAGCommandParser:
         )
 
         for node in self.nodes.values():
-            d.node(**node.to_node_kwargs())
+            if node.type is NodeType.Job:
+                d.node(**job_node_kwargs(node))
+            elif node.type is NodeType.SubDAG:
+                d.subdag(**subdag_node_kwargs(node))
+            else:
+                raise Exception("bad node type")
 
         for name, node in self.nodes.items():
             d.nodes[name].children.add(*(d.nodes[n.name] for n in node.children))
@@ -141,10 +141,25 @@ class DAGCommandParser:
         else:
             raise Exception(f"unrecognized command on line {line_number}: {line}")
 
+    # todo: _process_job and _process_subdag are identical...
+
     def _process_job(self, match, line_number):
         node = self.nodes[match.group("name")]
 
-        node.submit_file = Path(match.group("filename"))
+        node.type = NodeType.Job
+
+        node.file = Path(match.group("filename"))
+        dir = match.group("directory")
+        node.dir = Path(dir) if dir is not None else None
+        node.done = bool(match.group("done"))
+        node.noop = bool(match.group("noop"))
+
+    def _process_subdag(self, match, line_number):
+        node = self.nodes[match.group("name")]
+
+        node.type = NodeType.SubDAG
+
+        node.file = Path(match.group("filename"))
         dir = match.group("directory")
         node.dir = Path(dir) if dir is not None else None
         node.done = bool(match.group("done"))
@@ -260,11 +275,17 @@ class DAGCommandParser:
         self.parse_file(Path(path))
 
 
+class NodeType(enum.Enum):
+    Job = enum.auto()
+    SubDAG = enum.auto()
+
+
 class RawNode:
     def __init__(
         self,
         name,
-        submit_file=None,
+        type=None,
+        file=None,
         dir=None,
         noop=False,
         done=False,
@@ -280,7 +301,8 @@ class RawNode:
         abort=None,
     ):
         self.name = name
-        self.submit_file = Path(submit_file) if submit_file is not None else None
+        self.type = type
+        self.file = file
         self.dir = Path(dir) if dir is not None else None
         self.noop = noop
         self.done = done
@@ -297,24 +319,13 @@ class RawNode:
         self.parents = parents or set()
         self.children = children or set()
 
-    def to_node_kwargs(self) -> dict:
-        return dict(
-            name=self.name,
-            submit_description=htcondor.Submit(self.submit_file.read_text()),
-            dir=self.dir,
-            noop=self.noop,
-            done=self.done,
-            pre=self.pre,
-            post=self.post,
-        )
-
     @property
-    def submit_file(self):
-        return self._submit_file
+    def file(self):
+        return self._file
 
-    @submit_file.setter
-    def submit_file(self, path: Optional[Path]):
-        self._submit_file = Path(path) if path is not None else None
+    @file.setter
+    def file(self, path: Optional[Path]):
+        self._file = Path(path) if path is not None else None
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.name})"
@@ -327,4 +338,28 @@ class RawNode:
         return hash((self.__class__, self.name))
 
     def __eq__(self, other):
-        return isinstance(other, RawNode) and self.name == other.name
+        return isinstance(other, self.__class__) and self.name == other.name
+
+
+def job_node_kwargs(node):
+    return dict(
+        name=node.name,
+        submit_description=htcondor.Submit(node.file.read_text()),
+        dir=node.dir,
+        noop=node.noop,
+        done=node.done,
+        pre=node.pre,
+        post=node.post,
+    )
+
+
+def subdag_node_kwargs(node):
+    return dict(
+        name=node.name,
+        dag_file=node.file,
+        dir=node.dir,
+        noop=node.noop,
+        done=node.done,
+        pre=node.pre,
+        post=node.post,
+    )

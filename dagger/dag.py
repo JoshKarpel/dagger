@@ -59,7 +59,12 @@ class DAG:
         return node in self._nodes
 
     def node(self, **kwargs):
-        node = Node(dag=self, **kwargs)
+        node = JobNode(dag=self, **kwargs)
+        self.nodes.add(node)
+        return node
+
+    def subdag(self, **kwargs):
+        node = SubDagNode(dag=self, **kwargs)
         self.nodes.add(node)
         return node
 
@@ -168,7 +173,7 @@ class NodeStore:
     def __getitem__(self, node):
         if isinstance(node, str):
             return self.nodes[node]
-        elif isinstance(node, Node):
+        elif isinstance(node, JobNode):
             return self.nodes[node.name]
         else:
             raise KeyError()
@@ -177,7 +182,7 @@ class NodeStore:
         yield from self.nodes.values()
 
     def __contains__(self, node):
-        if isinstance(node, Node):
+        if isinstance(node, JobNode):
             return node in self.nodes.values()
         elif isinstance(node, str):
             return node in self.nodes.keys()
@@ -203,15 +208,12 @@ def flatten(nested_iterable) -> List[Any]:
 class Node:
     def __init__(
         self,
-        dag: DAG,
+        dag,
         *,
         name: str,
-        postfix_format="{:d}",
-        submit_description: Optional[htcondor.Submit] = None,
         dir: Optional[os.PathLike] = None,
         noop: bool = False,
         done: bool = False,
-        vars: Optional[Union[Dict[str, str], Iterable[Dict[str, str]]]] = None,
         retries: Optional[int] = 0,
         retry_unless_exit: Optional[int] = None,
         pre: Optional[Script] = None,
@@ -221,18 +223,14 @@ class Node:
         abort: Optional[DAGAbortCondition] = None,
     ):
         self._dag = dag
-
         self.name = name
-        self.postfix_format = postfix_format
 
-        self.submit_description = submit_description or htcondor.Submit({})
+        self.parents = NodeStore()
+        self.children = NodeStore()
+
         self.dir = Path(dir) if dir is not None else dir
         self.noop = noop
         self.done = done
-
-        if vars is None:
-            vars = [{}]
-        self.vars = list(vars)
 
         self.retries = retries
         self.retry_unless_exit = retry_unless_exit
@@ -242,9 +240,6 @@ class Node:
 
         self.pre = pre
         self.post = post
-
-        self.parents = NodeStore()
-        self.children = NodeStore()
 
     def __repr__(self):
         return f"{self.__class__.__name__}({self.name})"
@@ -260,10 +255,10 @@ class Node:
         return hash((self.__class__, self.name))
 
     def __eq__(self, other):
-        return isinstance(other, Node) and self.name == other.name
+        return isinstance(other, JobNode) and self.name == other.name
 
     def __lt__(self, other):
-        if not isinstance(other, Node):
+        if not isinstance(other, JobNode):
             raise TypeError(
                 f"{self.__class__.__name__} does not support < with {other.__class__.__name__}"
             )
@@ -308,6 +303,34 @@ class Node:
         self.parents.remove(*nodes)
         for node in nodes:
             node.children.remove(self)
+
+
+class JobNode(Node):
+    def __init__(
+        self,
+        dag: DAG,
+        *,
+        postfix_format="{:d}",
+        submit_description: Optional[htcondor.Submit] = None,
+        vars: Optional[Union[Dict[str, str], Iterable[Dict[str, str]]]] = None,
+        **kwargs,
+    ):
+        super().__init__(dag, **kwargs)
+
+        self.postfix_format = postfix_format
+
+        self.submit_description = submit_description or htcondor.Submit({})
+
+        if vars is None:
+            vars = [{}]
+        self.vars = list(vars)
+
+
+class SubDagNode(Node):
+    def __init__(self, dag: DAG, *, dag_file: Path, **kwargs):
+        super().__init__(dag, **kwargs)
+
+        self.dag_file = dag_file
 
 
 class Nodes:
