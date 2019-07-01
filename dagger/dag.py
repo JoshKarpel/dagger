@@ -13,24 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional, MutableMapping, List, Dict, Iterable, Union
+from typing import Optional, Dict, Iterable, Union, List, Any
 import logging
 
 import os
 import collections
-import enum
 import itertools
+import enum
 from pathlib import Path
-import re
-import sys
-import time
-import heapq
-import subprocess
 import collections.abc
 import fnmatch
 
 import htcondor
-import htcondor_jobs as jobs
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -60,6 +54,9 @@ class DAG:
     @property
     def nodes(self):
         return self._nodes
+
+    def __contains__(self, node):
+        return node in self._nodes
 
     def node(self, **kwargs):
         node = Node(dag=self, **kwargs)
@@ -151,7 +148,12 @@ class NodeStore:
 
     def add(self, *nodes):
         for node in nodes:
-            self.nodes[node.name] = node
+            if isinstance(node, Node):
+                self.nodes[node.name] = node
+            elif isinstance(node, Nodes):
+                self.nodes.update({n.name: n for n in node})
+            else:
+                raise TypeError(f"{node} is not a Node or a Nodes")
 
     def remove(self, *nodes):
         for node in nodes:
@@ -159,6 +161,9 @@ class NodeStore:
                 self.nodes.pop(node, None)
             elif isinstance(node, Node):
                 self.nodes.pop(node.name, None)
+            elif isinstance(node, Nodes):
+                for n in node:
+                    self.nodes.pop(n.name, None)
 
     def __getitem__(self, node):
         if isinstance(node, str):
@@ -171,6 +176,13 @@ class NodeStore:
     def __iter__(self):
         yield from self.nodes.values()
 
+    def __contains__(self, node):
+        if isinstance(node, Node):
+            return node in self.nodes.values()
+        elif isinstance(node, str):
+            return node in self.nodes.keys()
+        return False
+
     def items(self):
         yield from self.nodes.items()
 
@@ -182,6 +194,10 @@ class NodeStore:
 
     def __len__(self):
         return len(self.nodes)
+
+
+def flatten(nested_iterable) -> List[Any]:
+    return list(itertools.chain.from_iterable(nested_iterable))
 
 
 class Node:
@@ -237,6 +253,9 @@ class Node:
         data = "\n".join(f"  {k} = {v}" for k, v in self.__dict__.items())
         return f"{self.__class__.__name__}(\n{data}\n)"
 
+    def __iter__(self):
+        yield self
+
     def __hash__(self):
         return hash((self.__class__, self.name))
 
@@ -267,21 +286,25 @@ class Node:
         return node
 
     def add_children(self, *nodes):
+        nodes = flatten(nodes)
         self.children.add(*nodes)
         for node in nodes:
             node.parents.add(self)
 
     def remove_children(self, *nodes):
+        nodes = flatten(nodes)
         self.children.remove(*nodes)
         for node in nodes:
             node.parents.remove(self)
 
     def add_parents(self, *nodes):
+        nodes = flatten(nodes)
         self.parents.add(*nodes)
         for node in nodes:
             node.children.add(self)
 
     def remove_parents(self, *nodes):
+        nodes = flatten(nodes)
         self.parents.remove(*nodes)
         for node in nodes:
             node.children.remove(self)
@@ -289,18 +312,16 @@ class Node:
 
 class Nodes:
     def __init__(self, *nodes):
-        self.nodes = set()
+        self.nodes = NodeStore()
+        nodes = flatten(nodes)
         for node in nodes:
-            if isinstance(node, Node):
-                self.nodes.add(node)
-            else:
-                self.nodes.update(node)
+            self.nodes.add(node)
 
     def __iter__(self):
         yield from self.nodes
 
     def __contains__(self, node):
-        return node in self.nodes or node.name in (n.name for n in self.nodes)
+        return node in self.nodes
 
     def __repr__(self):
         return f"Nodes({', '.join(repr(n) for n in sorted(self.nodes, key = lambda n: n.name))})"
