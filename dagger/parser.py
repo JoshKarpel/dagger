@@ -70,6 +70,7 @@ CMD_REGEXES = dict(
     ),
     maxjobs=re.compile(r"^MAXJOBS\s+(?P<category>\S+)\s+(?P<value>\S+)", re.IGNORECASE),
     config=re.compile(r"^CONFIG\s+(?P<filename>\S+)", re.IGNORECASE),
+    include=re.compile(r"^INCLUDE\s+(?P<filename>\S+)", re.IGNORECASE),
     node_status_file=re.compile(
         r"^NODE_STATUS_FILE\s+(?P<filename>\S+)(\s+(?P<updatetime>\S+))?", re.IGNORECASE
     ),
@@ -252,6 +253,11 @@ class DAGCommandParser:
             update_time = int(match.group("updatetime"))
 
         self.node_status_file = dag.NodeStatusFile(path=path, update_time=update_time)
+
+    def _process_include(self, match, line_number):
+        path = match.group("filename")
+
+        self.parse_file(Path(path))
 
 
 class RawNode:
