@@ -165,10 +165,7 @@ class DAGWriter:
                 for idx in range(len(child.vars))
             )
 
-            if len(node.vars) == len(child.vars):
-                for p, c in zip(parents, children):
-                    yield f"PARENT {p} CHILD {c}"
-            elif len(node.vars) == 1 or len(child.vars) == 1:
+            if len(node.vars) == 1 or len(child.vars) == 1:
                 yield f"PARENT {' '.join(parents)} CHILD {' '.join(children)}"
             else:
                 join_name = f"__JOIN~{next(self.join_counter)}__"

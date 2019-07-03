@@ -61,12 +61,12 @@ class DAG:
         return node in self._nodes
 
     def node(self, **kwargs):
-        node = NodeSet(dag=self, **kwargs)
+        node = NodeLayer(dag=self, **kwargs)
         self.nodes.add(node)
         return node
 
     def subdag(self, **kwargs):
-        node = SubDag(dag=self, **kwargs)
+        node = SubDAG(dag=self, **kwargs)
         self.nodes.add(node)
         return node
 
@@ -175,7 +175,7 @@ class NodeStore:
     def __getitem__(self, node):
         if isinstance(node, str):
             return self.nodes[node]
-        elif isinstance(node, NodeSet):
+        elif isinstance(node, NodeLayer):
             return self.nodes[node.name]
         else:
             raise KeyError()
@@ -184,7 +184,7 @@ class NodeStore:
         yield from self.nodes.values()
 
     def __contains__(self, node):
-        if isinstance(node, NodeSet):
+        if isinstance(node, NodeLayer):
             return node in self.nodes.values()
         elif isinstance(node, str):
             return node in self.nodes.keys()
@@ -265,7 +265,7 @@ class BaseNode(abc.ABC):
         return self.name == other.name
 
     def __lt__(self, other):
-        if not isinstance(other, NodeSet):
+        if not isinstance(other, NodeLayer):
             return NotImplemented
         return self.name < other.name
 
@@ -310,7 +310,7 @@ class BaseNode(abc.ABC):
             node.children.remove(self)
 
 
-class NodeSet(BaseNode):
+class NodeLayer(BaseNode):
     def __init__(
         self,
         dag: DAG,
@@ -331,7 +331,7 @@ class NodeSet(BaseNode):
         self.vars = list(vars)
 
 
-class SubDag(BaseNode):
+class SubDAG(BaseNode):
     def __init__(self, dag: DAG, *, dag_file: Path, **kwargs):
         super().__init__(dag, **kwargs)
 
