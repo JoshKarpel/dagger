@@ -47,6 +47,7 @@ class DAG:
         node_status_file=None,
     ):
         self._nodes = NodeStore()
+        self._edges = EdgeStore()
         self.jobstate_log = jobstate_log
         self.max_jobs_per_category = max_jobs_by_category or {}
         self.config_file = config_file
@@ -56,6 +57,10 @@ class DAG:
     @property
     def nodes(self):
         return self._nodes
+
+    @property
+    def edges(self):
+        return self._edges
 
     def __contains__(self, node):
         return node in self._nodes
@@ -149,18 +154,34 @@ class Script:
         return f"{self.__class__.__name__}(executable = {self.executable}, arguments = {self.arguments}, retry = {self.retry}, retry_status = {self.retry_status}, retry_delay = {self.retry_delay})"
 
 
+class EdgeType(enum.Enum):
+    ManyToMany = enum.auto()
+
+
+class EdgeStore:
+    def __init__(self):
+        self.edges = {}
+
+    def __iter__(self):
+        yield from self.edges
+
+    def __contains__(self, item):
+        return item in self.edges
+
+    def add(self, parent, child, type=EdgeType.ManyToMany):
+        self.edges[(parent, child)] = type
+
+    def remove(self, parent, child):
+        self.edges.pop((parent, child), None)
+
+
 class NodeStore:
     def __init__(self):
         self.nodes = {}
 
     def add(self, *nodes):
         for node in nodes:
-            if isinstance(node, BaseNode):
-                self.nodes[node.name] = node
-            elif isinstance(node, Nodes):
-                self.nodes.update({n.name: n for n in node})
-            else:
-                raise TypeError(f"{node} is not a Node or a Nodes")
+            self.nodes[node.name] = node
 
     def remove(self, *nodes):
         for node in nodes:
@@ -168,9 +189,6 @@ class NodeStore:
                 self.nodes.pop(node, None)
             elif isinstance(node, BaseNode):
                 self.nodes.pop(node.name, None)
-            elif isinstance(node, Nodes):
-                for n in node:
-                    self.nodes.pop(n.name, None)
 
     def __getitem__(self, node):
         if isinstance(node, str):
@@ -184,7 +202,7 @@ class NodeStore:
         yield from self.nodes.values()
 
     def __contains__(self, node):
-        if isinstance(node, NodeLayer):
+        if isinstance(node, BaseNode):
             return node in self.nodes.values()
         elif isinstance(node, str):
             return node in self.nodes.keys()
@@ -229,9 +247,6 @@ class BaseNode(abc.ABC):
         self._dag = dag
         self.name = name
 
-        self.parents = NodeStore()
-        self.children = NodeStore()
-
         self.dir = Path(dir) if dir is not None else None
         self.noop = noop
         self.done = done
@@ -272,42 +287,44 @@ class BaseNode(abc.ABC):
     def child(self, **kwargs):
         node = self._dag.node(**kwargs)
 
-        node.parents.add(self)
-        self.children.add(node)
+        self._dag.edges.add(self, node)
 
         return node
 
     def parent(self, **kwargs):
         node = self._dag.node(**kwargs)
 
-        node.children.add(self)
-        self.parents.add(node)
+        self._dag.edges.add(node, self)
 
         return node
 
     def add_children(self, *nodes):
         nodes = flatten(nodes)
-        self.children.add(*nodes)
         for node in nodes:
-            node.parents.add(self)
+            self._dag.edges.add(self, node)
 
     def remove_children(self, *nodes):
         nodes = flatten(nodes)
-        self.children.remove(*nodes)
         for node in nodes:
-            node.parents.remove(self)
+            self._dag.edges.remove(self, node)
 
     def add_parents(self, *nodes):
         nodes = flatten(nodes)
-        self.parents.add(*nodes)
         for node in nodes:
-            node.children.add(self)
+            self._dag.edges.add(node, self)
 
     def remove_parents(self, *nodes):
         nodes = flatten(nodes)
-        self.parents.remove(*nodes)
         for node in nodes:
-            node.children.remove(self)
+            self._dag.edges.remove(node, self)
+
+    @property
+    def parents(self):
+        return [p for p, c in self._dag.edges if c is self]
+
+    @property
+    def children(self):
+        return [c for p, c in self._dag.edges if p is self]
 
 
 class NodeLayer(BaseNode):
@@ -361,11 +378,10 @@ class Nodes:
         return next(iter(self.nodes))
 
     def child(self, **kwargs):
-        node = self._some_element().child(**kwargs)
+        node = self._some_element().node(**kwargs)
 
         for s in self:
-            node.parents.add(s)
-            s.children.add(node)
+            s._dag.edges.add(self, node)
 
         return node
 
