@@ -84,8 +84,28 @@ class DAG:
             )
         )
 
+    @property
+    def node_to_children(self):
+        d = {n: set() for n in self.nodes}
+        for parent, child in self.edges:
+            d[parent].add(child)
+
+        return {k: Nodes(v) for k, v in d.items()}
+
+    @property
+    def node_to_parents(self):
+        d = {n: set() for n in self.nodes}
+        for parent, child in self.edges:
+            d[child].add(parent)
+
+        return {k: Nodes(v) for k, v in d.items()}
+
     def roots(self):
-        return Nodes(*(node for node in self.nodes if len(node.parents) == 0))
+        return Nodes(
+            child
+            for child, parents in self.node_to_parents.items()
+            if len(parents) == 0
+        )
 
     def walk(self, order: WalkOrder = WalkOrder.DEPTH_FIRST):
         seen = set()
@@ -168,11 +188,17 @@ class EdgeStore:
     def __contains__(self, item):
         return item in self.edges
 
+    def get(self, parent, child):
+        try:
+            return self.edges[(parent, child)]
+        except KeyError:
+            return None
+
     def add(self, parent, child, type=EdgeType.ManyToMany):
         self.edges[(parent, child)] = type
 
-    def remove(self, parent, child):
-        self.edges.pop((parent, child), None)
+    def pop(self, parent, child):
+        return self.edges.pop((parent, child), None)
 
 
 class NodeStore:
@@ -181,7 +207,10 @@ class NodeStore:
 
     def add(self, *nodes):
         for node in nodes:
-            self.nodes[node.name] = node
+            if isinstance(node, BaseNode):
+                self.nodes[node.name] = node
+            elif isinstance(node, Nodes):
+                self.add(self, node)
 
     def remove(self, *nodes):
         for node in nodes:
@@ -189,11 +218,13 @@ class NodeStore:
                 self.nodes.pop(node, None)
             elif isinstance(node, BaseNode):
                 self.nodes.pop(node.name, None)
+            elif isinstance(node, Nodes):
+                self.remove(node)
 
     def __getitem__(self, node):
         if isinstance(node, str):
             return self.nodes[node]
-        elif isinstance(node, NodeLayer):
+        elif isinstance(node, BaseNode):
             return self.nodes[node.name]
         else:
             raise KeyError()
@@ -303,28 +334,36 @@ class BaseNode(abc.ABC):
         for node in nodes:
             self._dag.edges.add(self, node)
 
+        return self
+
     def remove_children(self, *nodes):
         nodes = flatten(nodes)
         for node in nodes:
             self._dag.edges.remove(self, node)
+
+        return self
 
     def add_parents(self, *nodes):
         nodes = flatten(nodes)
         for node in nodes:
             self._dag.edges.add(node, self)
 
+        return self
+
     def remove_parents(self, *nodes):
         nodes = flatten(nodes)
         for node in nodes:
             self._dag.edges.remove(node, self)
 
+        return self
+
     @property
     def parents(self):
-        return [p for p, c in self._dag.edges if c is self]
+        return self._dag.node_to_parents[self]
 
     @property
     def children(self):
-        return [c for p, c in self._dag.edges if p is self]
+        return self._dag.node_to_children[self]
 
 
 class NodeLayer(BaseNode):
@@ -362,6 +401,9 @@ class Nodes:
         for node in nodes:
             self.nodes.add(node)
 
+    def __len__(self):
+        return len(self.nodes)
+
     def __iter__(self):
         yield from self.nodes
 
@@ -378,42 +420,31 @@ class Nodes:
         return next(iter(self.nodes))
 
     def child(self, **kwargs):
-        node = self._some_element().node(**kwargs)
+        node = self._some_element().child(**kwargs)
 
-        for s in self:
-            s._dag.edges.add(self, node)
+        node.add_parents(self)
 
         return node
 
     def parent(self, **kwargs):
-        node = self._some_element().child(**kwargs)
+        node = self._some_element().parent(**kwargs)
 
-        for s in self:
-            node.children.add(self)
-            s.parents.add(node)
+        node.add_children(self)
 
         return node
 
     def add_children(self, *nodes):
         for s in self:
-            s.children.add(*nodes)
-            for node in nodes:
-                node.parents.add(s)
+            s.add_children(nodes)
 
     def remove_children(self, *nodes):
         for s in self:
-            s.children.remove(*nodes)
-            for node in nodes:
-                node.parents.remove(s)
+            s.remove_children(nodes)
 
     def add_parents(self, *nodes):
         for s in self:
-            s.parents.add(*nodes)
-            for node in nodes:
-                node.children.add(s)
+            s.add_parents(nodes)
 
     def remove_parents(self, *nodes):
         for s in self:
-            s.parents.remove(*nodes)
-            for node in nodes:
-                node.children.remove(s)
+            s.remove_parents(nodes)
