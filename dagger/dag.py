@@ -65,7 +65,7 @@ class DAG:
     def __contains__(self, node):
         return node in self._nodes
 
-    def node(self, **kwargs):
+    def layer(self, **kwargs):
         node = NodeLayer(dag=self, **kwargs)
         self.nodes.add(node)
         return node
@@ -316,14 +316,14 @@ class BaseNode(abc.ABC):
         return self.name < other.name
 
     def child(self, **kwargs):
-        node = self._dag.node(**kwargs)
+        node = self._dag.layer(**kwargs)
 
         self._dag.edges.add(self, node)
 
         return node
 
     def parent(self, **kwargs):
-        node = self._dag.node(**kwargs)
+        node = self._dag.layer(**kwargs)
 
         self._dag.edges.add(node, self)
 

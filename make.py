@@ -16,7 +16,7 @@ dag = dagger.DAG(
     ),
 )
 
-A = dag.node(
+A = dag.layer(
     name="A",
     postfix_format="{:0>4}",
     pre=dagger.Script(

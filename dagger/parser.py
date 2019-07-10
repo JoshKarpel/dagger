@@ -103,7 +103,7 @@ class DAGCommandParser:
 
         for node in self.nodes.values():
             if node.type is NodeType.Job:
-                d.node(**job_node_kwargs(node))
+                d.layer(**job_node_kwargs(node))
             elif node.type is NodeType.SubDAG:
                 d.subdag(**subdag_node_kwargs(node))
             else:
